@@ -173,7 +173,68 @@ void init_array(py::module &m) {
       .def("metadata_num", &Array::metadata_num)
       .def("delete_array",
            py::overload_cast<const Context &, const std::string &>(
-               &Array::delete_array));
+               &Array::delete_array)
+      .def("serialize", [](Array &self, const Context &ctx, tiledb_serialization_type_t serialize_type,
+                                  int32_t client_side) -> py::buffer {
+               int rc;
+
+               tiledb_ctx_t *ctx_c;
+               tiledb_array_t *arr_c;
+               tiledb_buffer_t *buf_c;
+
+               ctx_c = ctx.ptr().get()
+               if (ctx_c == nullptr)
+               TPY_ERROR_LOC("Invalid context pointer.");
+
+               arr_c = self.ptr().get()
+               if (arr_c == nullptr)
+               TPY_ERROR_LOC("Invalid array pointer.");
+
+               rc = tiledb_serialize_array(ctx_c, arr_c, serialize_type, client_side, &buf_c);
+               if (rc == TILEDB_ERR)
+               TPY_ERROR_LOC("Could not serialize array.");
+
+               rc = tiledb_buffer_get_data(ctx, buff, &buff_data, &buff_num_bytes);
+               if (rc == TILEDB_ERR)
+                    TPY_ERROR_LOC("Could not get the data from the buffer.");
+
+               py::bytes output((char *)buf_c, buff_num_bytes);
+
+               tiledb_buffer_free(&buff);
+
+               return output
+          })
+          .def_static("deserialize_array", [](const Context &ctx,
+                                  py::buffer buffer,
+                                  tiledb_serialization_type_t serialize_type,
+                                  int32_t client_side) -> Array {
+               int rc;
+
+               tiledb_ctx_t *ctx_c;
+               tiledb_array_t *arr_c;
+               tiledb_buffer_t *buf_c;
+
+               ctx_c = ctx.ptr().get()
+               if (ctx_c == nullptr)
+               TPY_ERROR_LOC("Invalid context pointer.");
+
+               rc = tiledb_buffer_alloc(ctx_c, &buf_c);
+               if (rc == TILEDB_ERR)
+               TPY_ERROR_LOC("Could not allocate buffer.");
+
+               py::buffer_info buf_info = buffer.request();
+               rc = tiledb_buffer_set_data(ctx_c, buf_c, buf_info.ptr, buf_info.shape[0]);
+               if (rc == TILEDB_ERR)
+               TPY_ERROR_LOC("Could not set buffer.");
+
+               rc = tiledb_deserialize_array(ctx_c, buf_c, serialize_type, client_side,
+                                             &arr_c);
+               if (rc == TILEDB_ERR)
+               TPY_ERROR_LOC("Could not deserialize array.");
+
+               return Array(ctx, arr_c);
+          })
+          );
 }
 
 } // namespace libtiledbcpp

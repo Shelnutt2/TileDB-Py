@@ -63,11 +63,69 @@ public:
 
     return qry_c;
   }
+
+  static void *serialize_array(py::object ctx, py::object array,
+                                  py::buffer buffer,
+                                  tiledb_serialization_type_t serialize_type,
+                                  int32_t client_side) {
+      int rc;
+
+      tiledb_ctx_t *ctx_c;
+      tiledb_array_t *arr_c;
+      tiledb_buffer_t *buf_c;
+
+      ctx_c = (py::capsule)ctx.attr("__capsule__")();
+      if (ctx_c == nullptr)
+        TPY_ERROR_LOC("Invalid context pointer.");
+
+      arr_c = (py::capsule)array.attr("__capsule__")();
+      if (arr_c == nullptr)
+        TPY_ERROR_LOC("Invalid array pointer.");
+
+      rc = tiledb_serialize_array(ctx_c, arr_c, serialize_type, client_side, &buf_c);
+      if (rc == TILEDB_ERR)
+        TPY_ERROR_LOC("Could not serialize array.");
+
+      return buf_c;
+  }
+
+  static void *deserialize_array(py::object ctx,
+                                  py::buffer buffer,
+                                  tiledb_serialization_type_t serialize_type,
+                                  int32_t client_side) {
+      int rc;
+
+      tiledb_ctx_t *ctx_c;
+      tiledb_array_t *arr_c;
+      tiledb_buffer_t *buf_c;
+
+      ctx_c = (py::capsule)ctx.attr("__capsule__")();
+      if (ctx_c == nullptr)
+        TPY_ERROR_LOC("Invalid context pointer.");
+
+      rc = tiledb_buffer_alloc(ctx_c, &buf_c);
+      if (rc == TILEDB_ERR)
+        TPY_ERROR_LOC("Could not allocate buffer.");
+
+      py::buffer_info buf_info = buffer.request();
+      rc = tiledb_buffer_set_data(ctx_c, buf_c, buf_info.ptr, buf_info.shape[0]);
+      if (rc == TILEDB_ERR)
+        TPY_ERROR_LOC("Could not set buffer.");
+
+      rc = tiledb_deserialize_array(ctx_c, buf_c, serialize_type, client_side,
+                                    &arr_c);
+      if (rc == TILEDB_ERR)
+        TPY_ERROR_LOC("Could not deserialize array.");
+
+      return arr_c;
+  }
 };
 
 void init_serialization(py::module &m) {
   py::class_<PySerialization>(m, "serialization")
-      .def_static("deserialize_query", &PySerialization::deserialize_query);
+      .def_static("deserialize_query", &PySerialization::deserialize_query)
+      .def_static("serialize_array", &PySerialization::serialize_array)
+      .def_static("deserialize_array", &PySerialization::deserialize_array);
 
   py::enum_<tiledb_serialization_type_t>(m, "tiledb_serialization_type_t",
                                          py::arithmetic())
