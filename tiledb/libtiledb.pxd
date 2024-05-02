@@ -124,6 +124,8 @@ cdef extern from "tiledb/tiledb.h":
         TILEDB_VFS_APPEND
 
     # Types
+    ctypedef struct tiledb_buffer_t:
+        pass
     ctypedef struct tiledb_ctx_t:
         pass
     ctypedef struct tiledb_config_t:
@@ -154,6 +156,27 @@ cdef extern from "tiledb/tiledb.h":
         pass
     ctypedef struct tiledb_vfs_fh_t:
         pass
+
+    # buffer
+    int tiledb_buffer_alloc(
+        tiledb_ctx_t* ctx,
+        tiledb_buffer_t** buffer)
+
+    int tiledb_buffer_set_data(
+        tiledb_ctx_t* ctx,
+        tiledb_buffer_t* buffer,
+        void* data,
+        uint64_t size)
+
+    int tiledb_buffer_get_data(
+        tiledb_ctx_t* ctx,
+        tiledb_buffer_t* buffer,
+        void** data,
+        uint64_t *size)
+    
+    void tiledb_buffer_free(
+        tiledb_buffer_t** buffer
+    )
 
     # Config
     int tiledb_config_alloc(
@@ -579,6 +602,11 @@ cdef extern from "tiledb/tiledb.h":
         tiledb_ctx_t* ctx,
         tiledb_array_t* array,
         uint64_t* timestamp_end)
+
+    int tiledb_array_get_uri(
+        tiledb_ctx_t* ctx,
+        tiledb_array_t* array,
+        const char** uri)
 
     int tiledb_array_set_config(
         tiledb_ctx_t* ctx,
@@ -1168,6 +1196,27 @@ cdef extern from "tiledb/tiledb_experimental.h":
         const uint64_t num_fragments,
         tiledb_config_t* config
     )
+
+cdef extern from "tiledb/tiledb_serialization.h":
+    ctypedef enum tiledb_serialization_type_t:
+        TILEDB_CAPNP
+        TILEDB_JSON
+
+    ctypedef struct tiledb_serialization_type_t:
+        pass
+    int tiledb_serialize_array(
+        tiledb_ctx_t* ctx,
+        const tiledb_array_t* array,
+        tiledb_serialization_type_t serialize_type,
+        int32_t client_side,
+        tiledb_buffer_t** buffer)
+
+    int tiledb_deserialize_array(
+        tiledb_ctx_t* ctx,
+        const tiledb_buffer_t* buffer,
+        tiledb_serialization_type_t serialize_type,
+        int32_t client_side,
+        tiledb_array_t** array)
 
 # Free helper functions
 cpdef unicode ustring(object s)

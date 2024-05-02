@@ -5,6 +5,8 @@
 from cpython.pycapsule cimport PyCapsule_GetPointer, PyCapsule_IsValid, PyCapsule_New
 from cpython.version cimport PY_MAJOR_VERSION
 
+cimport numpy as cnp
+
 include "common.pxi"
 include "indexing.pyx"
 include "libmetadata.pyx"
@@ -1690,6 +1692,164 @@ cdef class Array(object):
 
         self.__init__(uri, mode=mode, key=key, attr=view_attr,
                       timestamp=timestamp_range, ctx=ctx)
+
+    def serialize(self, serialization_type='capnp', client_side=True) -> bytes:
+        """Serialize a TileDB Array from bytes
+
+        :param enum serialize_type: serialization type
+        :return bytes bytes: serialized bytes
+        """
+
+        ctx = self._ctx_()
+        cdef tiledb_ctx_t* ctx_ptr = safe_ctx_ptr(ctx)
+        cdef tiledb_array_t* array_ptr = self.ptr
+        cdef tiledb_buffer_t *buf_ptr = NULL
+        cdef void *buf_data
+        cdef uint64_t buf_num_bytes
+
+        rc = tiledb_serialize_array(ctx_ptr, array_ptr, serialization_type, client_side, &buf_ptr);
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+
+        rc = tiledb_buffer_get_data(ctx_ptr, buf_ptr, &buf_data, &buf_num_bytes);
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+
+        cdef np.ndarray data = np.zeros(buf_num_bytes, np.uint8)
+        cdef uint8_t[::1] data_memview = data
+
+        memcpy(&data_memview[0], buf_data, buf_num_bytes)
+        # cdef uint8_t [:] data = <uint8_t*>buf_data
+
+        tiledb_buffer_free(&buf_ptr);
+        return data
+
+    @staticmethod
+    def deserialize(buffer, serialization_type='capnp', key=None, ctx=None, client_side=True):
+        """Deserialize a TileDB Array from bytes
+
+        :param bytes buffer: bytes of serialized array
+        :param enum serialize_type: serialization type
+        :param str key: (default None) Encryption key to use for array
+        :param Ctx ctx: (default None) Optional TileDB Ctx used when creating the array,
+                        by default uses the ArraySchema's associated context
+                        (*not* necessarily ``tiledb.default_ctx``).
+
+        """
+        cdef tiledb_ctx_t* ctx_ptr = safe_ctx_ptr(ctx)
+        cdef tiledb_array_t* array_ptr = NULL
+        cdef tiledb_buffer_t *buf_ptr = NULL
+        cdef tiledb_array_schema_t *schema_ptr = NULL
+        cdef const char *uri_ptr
+        cdef tiledb_query_type_t query_type = TILEDB_READ
+        cdef uint64_t timestamp_start = 0
+        cdef uint64_t timestamp_end =  np.iinfo(np.uint64).max
+        cdef tiledb_array_type_t array_type
+        cdef tiledb_serialization_type_t serialization_type_c
+        cdef uint32_t client_side_c = client_side
+
+        serialization_type_to_c = {
+            "capnp": TILEDB_CAPNP,
+            "json": TILEDB_JSON
+        }
+
+        if serialization_type not in serialization_type_to_c:
+            raise ValueError("TileDB serialization mode must be 'capnp', or 'json'")
+
+        serialization_type_c = serialization_type_to_c[serialization_type]
+
+
+        cdef int rc = TILEDB_OK
+
+        if ctx is not None:
+            if not isinstance(ctx, Ctx):
+                raise TypeError("tiledb.Array.deserialize() expected tiledb.Ctx "
+                                "object to argument ctx")
+            ctx_ptr = safe_ctx_ptr(ctx)
+        
+        rc = tiledb_buffer_alloc(ctx_ptr, &buf_ptr)
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+        
+        if not isinstance(buffer, bytes):
+            raise TypeError("tiledb.Array.deserialize() expected bytes"
+                            "object to argument buffer")
+
+        cdef unsigned char[:] data_view = buffer
+        cdef void* value_buf = &data_view[0]
+        rc = tiledb_buffer_set_data(ctx_ptr, buf_ptr, value_buf, len(buffer))
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+
+        rc = tiledb_deserialize_array(ctx_ptr, buf_ptr, serialization_type_c, client_side, &array_ptr)
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+        
+        rc = tiledb_array_get_uri(ctx_ptr, array_ptr, &uri_ptr)
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+        
+        rc = tiledb_array_get_query_type(ctx_ptr, array_ptr, &query_type)
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+        
+        rc = tiledb_array_get_open_timestamp_start(ctx_ptr, array_ptr, &timestamp_start);
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+
+        rc = tiledb_array_get_open_timestamp_end(ctx_ptr, array_ptr, &timestamp_end);
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+            
+        # *** now we own array_ptr -- free in the try..except clause ***
+        try:
+            rc = tiledb_array_get_schema(ctx_ptr, array_ptr, &schema_ptr)
+            if rc != TILEDB_OK:
+                _raise_ctx_err(ctx_ptr, rc)
+
+            rc = tiledb_array_schema_get_array_type(ctx_ptr, schema_ptr, &array_type)
+            if rc != TILEDB_OK:
+                _raise_ctx_err(ctx_ptr, rc)
+
+            tiledb_array_schema_free(&schema_ptr)
+
+            from . import DenseArray, SparseArray
+            if array_type == TILEDB_DENSE:
+                new_array_typed = DenseArray.__new__(DenseArray)
+            else:
+                new_array_typed = SparseArray.__new__(SparseArray)
+
+        except:
+            tiledb_array_free(&array_ptr)
+            raise
+
+        # *** this assignment must happen outside the try block ***
+        # *** because the array destructor will free array_ptr  ***
+        # note: must use the immediate form `(<cast>x).m()` here
+        #       do not assign a temporary Array object
+        if array_type == TILEDB_DENSE:
+            (<DenseArrayImpl>new_array_typed).ptr = array_ptr
+            (<DenseArrayImpl>new_array_typed)._isopen = True
+        else:
+            (<SparseArrayImpl>new_array_typed).ptr = array_ptr
+            (<SparseArrayImpl>new_array_typed)._isopen = True
+        # *** new_array_typed now owns array_ptr ***
+
+        uri = str(uri_ptr)
+
+        query_type_to_mode = {
+            TILEDB_READ: "r",
+            TILEDB_WRITE: "w",
+            TILEDB_MODIFY_EXCLUSIVE: "m",
+            TILEDB_DELETE: "d"
+        }
+        if query_type not in query_type_to_mode:
+            raise ValueError("TileDB serialization query_type must be 'TILEDB_READ', 'TILEDB_WRITE, 'TILEDB_MODIFY_EXCLUSION' or 'TILEDB_DELETE'")
+        mode = query_type_to_mode[query_type]
+        
+        new_array_typed.__init__(uri, mode=mode, key=key, timestamp=tuple(timestamp_start, timestamp_end), attr=None, ctx=ctx)
+        return new_array_typed
+        
 
 cdef class Aggregation(object):
     """

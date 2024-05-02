@@ -1,6 +1,10 @@
 #include <tiledb/tiledb.h> // for enums
 #include <tiledb/tiledb>   // C++
 
+#if defined(TILEDB_SERIALIZATION)
+#include <tiledb/tiledb_serialization.h> // C
+#endif
+
 #include "common.h"
 
 #include <pybind11/numpy.h>
@@ -174,6 +178,7 @@ void init_array(py::module &m) {
       .def("delete_array",
            py::overload_cast<const Context &, const std::string &>(
                &Array::delete_array)
+#if defined(TILEDB_SERIALIZATION)
       .def("serialize", [](Array &self, const Context &ctx, tiledb_serialization_type_t serialize_type,
                                   int32_t client_side) -> py::buffer {
                int rc;
@@ -181,6 +186,8 @@ void init_array(py::module &m) {
                tiledb_ctx_t *ctx_c;
                tiledb_array_t *arr_c;
                tiledb_buffer_t *buf_c;
+               void *buff_data;
+               uint64_t buff_num_bytes;
 
                ctx_c = ctx.ptr().get()
                if (ctx_c == nullptr)
@@ -192,7 +199,6 @@ void init_array(py::module &m) {
 
                rc = tiledb_serialize_array(ctx_c, arr_c, serialize_type, client_side, &buf_c);
                if (rc == TILEDB_ERR)
-               TPY_ERROR_LOC("Could not serialize array.");
 
                rc = tiledb_buffer_get_data(ctx, buff, &buff_data, &buff_num_bytes);
                if (rc == TILEDB_ERR)
@@ -204,7 +210,7 @@ void init_array(py::module &m) {
 
                return output
           })
-          .def_static("deserialize_array", [](const Context &ctx,
+          .def_static("deserialize", [](const Context &ctx,
                                   py::buffer buffer,
                                   tiledb_serialization_type_t serialize_type,
                                   int32_t client_side) -> Array {
@@ -234,6 +240,7 @@ void init_array(py::module &m) {
 
                return Array(ctx, arr_c);
           })
+#endif
           );
 }
 
