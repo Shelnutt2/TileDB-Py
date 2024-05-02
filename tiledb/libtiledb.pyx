@@ -1693,7 +1693,7 @@ cdef class Array(object):
         self.__init__(uri, mode=mode, key=key, attr=view_attr,
                       timestamp=timestamp_range, ctx=ctx)
 
-    def serialize(self, serialization_type='capnp', client_side=True) -> bytes:
+    def serialize(self, serialization_type='capnp', client_side=True):
         """Serialize a TileDB Array from bytes
 
         :param enum serialize_type: serialization type
@@ -1704,10 +1704,21 @@ cdef class Array(object):
         cdef tiledb_ctx_t* ctx_ptr = safe_ctx_ptr(ctx)
         cdef tiledb_array_t* array_ptr = self.ptr
         cdef tiledb_buffer_t *buf_ptr = NULL
+        cdef uint32_t client_side_c = client_side
         cdef void *buf_data
         cdef uint64_t buf_num_bytes
 
-        rc = tiledb_serialize_array(ctx_ptr, array_ptr, serialization_type, client_side, &buf_ptr);
+        serialization_type_to_c = {
+            "capnp": TILEDB_CAPNP,
+            "json": TILEDB_JSON
+        }
+
+        if serialization_type not in serialization_type_to_c:
+            raise ValueError("TileDB serialization mode must be 'capnp', or 'json'")
+
+        cdef tiledb_serialization_type_t serialization_type_c = serialization_type_to_c[serialization_type]
+
+        rc = tiledb_serialize_array(ctx_ptr, array_ptr, serialization_type_c, client_side_c, &buf_ptr);
         if rc != TILEDB_OK:
             _raise_ctx_err(ctx_ptr, rc)
 
@@ -1722,7 +1733,7 @@ cdef class Array(object):
         # cdef uint8_t [:] data = <uint8_t*>buf_data
 
         tiledb_buffer_free(&buf_ptr);
-        return data
+        return bytes(data)
 
     @staticmethod
     def deserialize(buffer, serialization_type='capnp', key=None, ctx=None, client_side=True):
@@ -1736,6 +1747,9 @@ cdef class Array(object):
                         (*not* necessarily ``tiledb.default_ctx``).
 
         """
+        if not ctx:
+            ctx = default_ctx()
+
         cdef tiledb_ctx_t* ctx_ptr = safe_ctx_ptr(ctx)
         cdef tiledb_array_t* array_ptr = NULL
         cdef tiledb_buffer_t *buf_ptr = NULL
@@ -1775,8 +1789,9 @@ cdef class Array(object):
             raise TypeError("tiledb.Array.deserialize() expected bytes"
                             "object to argument buffer")
 
-        cdef unsigned char[:] data_view = buffer
-        cdef void* value_buf = &data_view[0]
+        # cdef unsigned char[:] data_view = buffer
+        cdef const uint8_t[::1] data_view = buffer
+        cdef void* value_buf = <void*>&data_view[0]
         rc = tiledb_buffer_set_data(ctx_ptr, buf_ptr, value_buf, len(buffer))
         if rc != TILEDB_OK:
             _raise_ctx_err(ctx_ptr, rc)
@@ -1847,7 +1862,7 @@ cdef class Array(object):
             raise ValueError("TileDB serialization query_type must be 'TILEDB_READ', 'TILEDB_WRITE, 'TILEDB_MODIFY_EXCLUSION' or 'TILEDB_DELETE'")
         mode = query_type_to_mode[query_type]
         
-        new_array_typed.__init__(uri, mode=mode, key=key, timestamp=tuple(timestamp_start, timestamp_end), attr=None, ctx=ctx)
+        new_array_typed.__init__(uri, mode=mode, key=key, timestamp=(timestamp_start, timestamp_end), attr=None, ctx=ctx)
         return new_array_typed
         
 
