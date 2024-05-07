@@ -1736,7 +1736,7 @@ cdef class Array(object):
         return bytes(data)
 
     @staticmethod
-    def deserialize(buffer, serialization_type='capnp', key=None, ctx=None, client_side=True):
+    def deserialize(buffer, serialization_type='capnp', key=None, ctx=None, client_side=True, uri=None):
         """Deserialize a TileDB Array from bytes
 
         :param bytes buffer: bytes of serialized array
@@ -1793,6 +1793,11 @@ cdef class Array(object):
         cdef const uint8_t[::1] data_view = buffer
         cdef void* value_buf = <void*>&data_view[0]
         rc = tiledb_buffer_set_data(ctx_ptr, buf_ptr, value_buf, len(buffer))
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+
+        uri_ptr = PyBytes_AS_STRING(uri)
+        rc = tiledb_array_alloc(ctx_ptr, uri_ptr, &array_ptr)
         if rc != TILEDB_OK:
             _raise_ctx_err(ctx_ptr, rc)
 
