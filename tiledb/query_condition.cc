@@ -57,6 +57,7 @@ public:
   shared_ptr<QueryCondition> ptr() { return qc_; }
 
   py::capsule __capsule__() { return py::capsule(&qc_, "qc"); }
+  py::capsule __c_capsule__() { return py::capsule(qc_->ptr().get(), "query_condition"); }
 
   void set_use_enumeration(bool use_enumeration) {
     QueryConditionExperimental::set_use_enumeration(ctx_, *qc_,
@@ -167,6 +168,7 @@ void init_query_condition(py::module &m) {
                &PyQueryCondition::init))
 
       .def("__capsule__", &PyQueryCondition::__capsule__)
+      .def("__c_capsule__", &PyQueryCondition::__c_capsule__)
 
       .def("combine", &PyQueryCondition::combine)
 

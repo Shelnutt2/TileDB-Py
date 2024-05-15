@@ -394,40 +394,40 @@ cdef _update_array(
 
     # Set data and offsets buffers for dimensions (sparse arrays only)
     ibuffer = nattr
-    if issparse:
-        for dim_idx, coords in enumerate(coordinates):
-            if tiledb_array.schema.domain.dim(dim_idx).isvar:
-                buffer, offsets = array_to_buffer(coords, True, False)
-                buffer_sizes[ibuffer] = buffer.nbytes
-                buffer_offsets_sizes[ibuffer] = offsets.nbytes
-            else:
-                buffer, offsets = coords, None
-                buffer_sizes[ibuffer] = buffer.nbytes
-            output_values.append(buffer)
-            output_offsets.append(offsets)
+    # if issparse:
+    #     for dim_idx, coords in enumerate(coordinates):
+    #         if tiledb_array.schema.domain.dim(dim_idx).isvar:
+    #             buffer, offsets = array_to_buffer(coords, True, False)
+    #             buffer_sizes[ibuffer] = buffer.nbytes
+    #             buffer_offsets_sizes[ibuffer] = offsets.nbytes
+    #         else:
+    #             buffer, offsets = coords, None
+    #             buffer_sizes[ibuffer] = buffer.nbytes
+    #         output_values.append(buffer)
+    #         output_offsets.append(offsets)
 
-            name = tiledb_array.schema.domain.dim(dim_idx).name
-            buffer_names.append(name)
+    #         name = tiledb_array.schema.domain.dim(dim_idx).name
+    #         buffer_names.append(name)
 
-            ibuffer = ibuffer + 1
+    #         ibuffer = ibuffer + 1
 
-    for label_name, label_values in labels.items():
-        # Append buffer name
-        buffer_names.append(label_name)
-        # Get label data buffer and offsets buffer for the labels
-        dim_label = tiledb_array.schema.dim_label(label_name)
-        if dim_label.isvar:
-            buffer, offsets = array_to_buffer(label_values, True, False)
-            buffer_sizes[ibuffer] = buffer.nbytes
-            buffer_offsets_sizes[ibuffer] = offsets.nbytes
-        else:
-            buffer, offsets = label_values, None
-            buffer_sizes[ibuffer] = buffer.nbytes
-        # Append the buffers
-        output_values.append(buffer)
-        output_offsets.append(offsets)
+    # for label_name, label_values in labels.items():
+    #     # Append buffer name
+    #     buffer_names.append(label_name)
+    #     # Get label data buffer and offsets buffer for the labels
+    #     dim_label = tiledb_array.schema.dim_label(label_name)
+    #     if dim_label.isvar:
+    #         buffer, offsets = array_to_buffer(label_values, True, False)
+    #         buffer_sizes[ibuffer] = buffer.nbytes
+    #         buffer_offsets_sizes[ibuffer] = offsets.nbytes
+    #     else:
+    #         buffer, offsets = label_values, None
+    #         buffer_sizes[ibuffer] = buffer.nbytes
+    #     # Append the buffers
+    #     output_values.append(buffer)
+    #     output_offsets.append(offsets)
 
-        ibuffer = ibuffer + 1
+    #     ibuffer = ibuffer + 1
 
 
     # Allocate the query
@@ -456,27 +456,19 @@ cdef _update_array(
     cdef void* s_end_ptr = NULL
     cdef tiledb_subarray_t* subarray_ptr = NULL
     cdef tiledb_query_condition_t* query_condition_ptr = NULL
-    if not issparse:
-        subarray_ptr = <tiledb_subarray_t*>PyCapsule_GetPointer(
-                subarray.__capsule__(), "subarray")
-        # Set the subarray on the query
-        rc = tiledb_query_set_subarray_t(ctx_ptr, query_ptr, subarray_ptr)
-        if rc != TILEDB_OK:
-            tiledb_query_free(&query_ptr)
-            _raise_ctx_err(ctx_ptr, rc)
+    # if not issparse:
+    #     subarray_ptr = <tiledb_subarray_t*>PyCapsule_GetPointer(
+    #             subarray.__capsule__(), "subarray")
+    #     # Set the subarray on the query
+    #     rc = tiledb_query_set_subarray_t(ctx_ptr, query_ptr, subarray_ptr)
+    #     if rc != TILEDB_OK:
+    #         tiledb_query_free(&query_ptr)
+    #         _raise_ctx_err(ctx_ptr, rc)
     
     # Check if condition can be set
     if cond is not None:
-        query_condition_ptr = <tiledb_query_condition_t*>PyCapsule_GetPointer(
-                cond.__capsule__(), "qc")
-        # query_condition_ptr = cond.c_obj.ptr().get();
+        query_condition_ptr = <tiledb_query_condition_t*>PyCapsule_GetPointer(cond.__c_capsule__(), "query_condition");
         tiledb_query_set_condition(ctx_ptr, query_ptr, query_condition_ptr);
-
-    #         auto pyqc = (cond.attr("c_obj")).cast<PyQueryCondition>();
-    # auto qc = pyqc.ptr().get();
-    # query_->set_condition(*qc);
-    #     tiledb_query_set_condition(
-    #     ctx.ptr().get(), query_.get(), condition.ptr().get())
 
     # Set buffers on the query
     cdef bytes bname
@@ -3300,6 +3292,10 @@ def _setitem_impl_sparse(self: Array, selection, val, dict nullmaps, object cond
         raise TileDBError("Sparse write input data count does not match number of attributes")
 
     if self.mode == 'u':
+        from tiledb.main import PyQueryCondition
+        cond.init_query_condition(self.uri, sparse_attributes, self.ctx)
+        # pyqcond = ().cast<PyQueryCondition>();
+
         _update_array(
             ctx_ptr,
             self.ptr,
@@ -3311,7 +3307,7 @@ def _setitem_impl_sparse(self: Array, selection, val, dict nullmaps, object cond
             labels,
             nullmaps,
             True,
-            cond
+            cond.c_obj
         )
         return
 
@@ -3704,7 +3700,7 @@ cdef class SparseArrayImpl(Array):
         from .query_condition import QueryCondition
         if isinstance(cond, str):
             qcond = QueryCondition(cond)
-
+  
         _setitem_impl_sparse(self, selection, values, dict(), qcond)
     
 
