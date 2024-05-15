@@ -138,6 +138,7 @@ void init_enums(py::module &m) {
       .value("READ", TILEDB_READ)
       .value("WRITE", TILEDB_WRITE)
       .value("DELETE", TILEDB_DELETE)
+      .value("UPDATE", TILEDB_UPDATE)
       .value("MODIFY_EXCLUSIVE", TILEDB_MODIFY_EXCLUSIVE);
 
   py::enum_<tiledb_query_condition_op_t>(m, "QueryConditionOp",

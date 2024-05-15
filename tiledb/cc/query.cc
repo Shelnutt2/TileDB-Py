@@ -70,6 +70,11 @@ void init_query(py::module &m) {
       //     (Query& (Query::*)(const std::string&, void*,
       //     uint64_t))&Query::set_data_buffer);
 
+      .def("add_update_value_to_query",
+          [](Query q, std::string name, py::array a) {
+               QueryExperimental::add_update_value_to_query(q.ctx(), q, name.c_str(), const_cast<void *>(a.data()), a.size());
+          })
+
       .def("set_data_buffer",
            [](Query &q, std::string name, py::array a) {
              // TODO check_type(a.dtype)

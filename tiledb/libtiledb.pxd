@@ -47,6 +47,7 @@ cdef extern from "tiledb/tiledb.h":
         TILEDB_DELETE
         TILEDB_READ
         TILEDB_WRITE
+        TILEDB_UPDATE
 
     ctypedef enum tiledb_query_status_t:
         TILEDB_FAILED

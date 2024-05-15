@@ -726,10 +726,11 @@ cdef ArrayPtr preload_array(uri, mode, key, timestamp, ctx=None):
         "r": TILEDB_READ,
         "w": TILEDB_WRITE,
         "m": TILEDB_MODIFY_EXCLUSIVE,
-        "d": TILEDB_DELETE
+        "d": TILEDB_DELETE,
+        "u": TILEDB_UPDATE
     }
     if mode not in mode_to_query_type:
-        raise ValueError("TileDB array mode must be 'r', 'w', 'm', or 'd'")
+        raise ValueError("TileDB array mode must be 'r', 'w', 'm', or 'd', 'u")
     query_type = mode_to_query_type[mode]
 
     # check the key, and convert the key to bytes
@@ -1826,8 +1827,8 @@ cdef class Query(object):
     def __init__(self, array, attrs=None, cond=None, dims=None,
                  coords=False, index_col=True, order=None,
                  use_arrow=None, return_arrow=False, return_incomplete=False):
-        if array.mode not in  ('r', 'd'):
-            raise ValueError("array mode must be read or delete mode")
+        if array.mode not in  ('r', 'd', 'u'):
+            raise ValueError("array mode must be read, delete or update mode")
 
         if dims is not None and coords == True:
             raise ValueError("Cannot pass both dims and coords=True to Query")
@@ -2159,7 +2160,6 @@ cdef class DenseArrayImpl(Array):
             then no dimensions are returned, unless coords=True.
         :param coords: if True, return array of coodinate value (default False).
         :param order: 'C', 'F', 'U', or 'G' (row-major, col-major, unordered, TileDB global order)
-        :param mode: "r" to read (default), "d" to delete
         :param use_arrow: if True, return dataframes via PyArrow if applicable.
         :param return_arrow: if True, return results as a PyArrow Table if applicable.
         :param return_incomplete: if True, initialize and return an iterable Query object over the indexed range.
@@ -3232,7 +3232,6 @@ cdef class SparseArrayImpl(Array):
             and only set specified index(es) in the final dataframe, or None.
         :param coords: (deprecated) if True, return array of coordinate value (default False).
         :param order: 'C', 'F', or 'G' (row-major, col-major, tiledb global order)
-        :param mode: "r" to read
         :param use_arrow: if True, return dataframes via PyArrow if applicable.
         :param return_arrow: if True, return results as a PyArrow Table if applicable.
         :return: A proxy Query object that can be used for indexing into the SparseArray
@@ -3261,8 +3260,8 @@ cdef class SparseArrayImpl(Array):
         OrderedDict(...'a1'... array([1, 2])...)
 
         """
-        if not self.isopen or self.mode not in  ('r', 'd'):
-            raise TileDBError("SparseArray must be opened in read or delete mode")
+        if not self.isopen or self.mode not in  ('r', 'd', 'u'):
+            raise TileDBError("SparseArray must be opened in read, delete or update mode")
 
         if attr_cond is not None:
             if cond is not None:
@@ -3372,8 +3371,8 @@ cdef class SparseArrayImpl(Array):
 
         """
         from .subarray import Subarray
-        if not self.isopen or self.mode not in ('r', 'd'):
-            raise TileDBError("SparseArray is not opened in read or delete mode")
+        if not self.isopen or self.mode not in ('r', 'd', 'u'):
+            raise TileDBError("SparseArray is not opened in read, delete or update mode")
 
         if attr_cond is not None:
             if cond is not None:
