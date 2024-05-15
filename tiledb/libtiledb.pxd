@@ -147,6 +147,8 @@ cdef extern from "tiledb/tiledb.h":
         pass
     ctypedef struct tiledb_query_t:
         pass
+    ctypedef struct tiledb_query_condition_t:
+        pass
     ctypedef struct tiledb_subarray_t:
         pass
     ctypedef struct tiledb_filter_list_t:
@@ -662,6 +664,18 @@ cdef extern from "tiledb/tiledb.h":
         tiledb_array_t* array,
         tiledb_query_type_t query_type,
         tiledb_query_t** query)
+
+    int tiledb_query_set_condition(
+        tiledb_ctx_t* ctx,
+        tiledb_query_t* query,
+        const tiledb_query_condition_t*)
+    
+    int tiledb_query_add_update_value(
+        tiledb_ctx_t* ctx,
+        tiledb_query_t* query,
+        const char* name,
+        void* update_value,
+        uint64_t update_value_size)
 
     int tiledb_query_set_subarray_t(
         tiledb_ctx_t* ctx,
@@ -1194,6 +1208,7 @@ cdef class Array(object):
 
 cdef class SparseArrayImpl(Array):
     cdef _read_sparse_subarray(self, object subarray, list attr_names, object cond, tiledb_layout_t layout)
+    cdef _update_sparse_subarray(self, object selection, object cond, dict values)
 
 cdef class DenseArrayImpl(Array):
     cdef _read_dense_subarray(self, object subarray, list attr_names, object cond, tiledb_layout_t layout, bint include_coords)

@@ -235,6 +235,7 @@ cdef _write_array(
     cdef void* s_start_ptr = NULL
     cdef void* s_end_ptr = NULL
     cdef tiledb_subarray_t* subarray_ptr = NULL
+    cdef tiledb_query_condition_t* query_condition_ptr = NULL
     if not issparse:
         subarray_ptr = <tiledb_subarray_t*>PyCapsule_GetPointer(
                 subarray.__capsule__(), "subarray")
@@ -243,6 +244,12 @@ cdef _write_array(
         if rc != TILEDB_OK:
             tiledb_query_free(&query_ptr)
             _raise_ctx_err(ctx_ptr, rc)
+    
+    #         auto pyqc = (cond.attr("c_obj")).cast<PyQueryCondition>();
+    # auto qc = pyqc.ptr().get();
+    # query_->set_condition(*qc);
+    #     tiledb_query_set_condition(
+    #     ctx.ptr().get(), query_.get(), condition.ptr().get())
 
     # Set buffers on the query
     cdef bytes bname
@@ -306,6 +313,199 @@ cdef _write_array(
             assert(type(fragment_info) is dict)
             fragment_info.clear()
             fragment_info.update(get_query_fragment_info(ctx_ptr, query_ptr))
+
+    finally:
+        tiledb_query_free(&query_ptr)
+    return
+
+cdef _update_array(
+        tiledb_ctx_t* ctx_ptr,
+        tiledb_array_t* array_ptr,
+        object tiledb_array,
+        object subarray,
+        list coordinates,
+        list buffer_names,
+        list values,
+        dict labels,
+        dict nullmaps,
+        bint issparse,
+        object cond,
+    ):
+
+    # used for buffer conversion (local import to avoid circularity)
+    from .main import array_to_buffer
+
+    cdef bint isfortran = False
+    cdef Py_ssize_t nattr = len(buffer_names)
+    cdef Py_ssize_t nlabel = len(labels)
+
+    # Create arrays to hold buffer sizes
+    cdef Py_ssize_t nbuffer = nattr + nlabel
+    if issparse:
+        nbuffer += tiledb_array.schema.ndim
+    cdef np.ndarray buffer_sizes = np.zeros((nbuffer,), dtype=np.uint64)
+    cdef np.ndarray buffer_offsets_sizes = np.zeros((nbuffer,),  dtype=np.uint64)
+    cdef np.ndarray nullmaps_sizes = np.zeros((nbuffer,), dtype=np.uint64)
+
+    # Create lists for data and offset buffers
+    output_values = list()
+    output_offsets = list()
+
+    # Set data and offset buffers for attributes
+    for i in range(nattr):
+        # if dtype is ASCII, ensure all characters are valid
+        if tiledb_array.schema.attr(i).isascii:
+            try:
+                values[i] = np.asarray(values[i], dtype=np.bytes_)
+            except Exception as exc:
+                raise TileDBError(f'dtype of attr {tiledb_array.schema.attr(i).name} is "ascii" but attr_val contains invalid ASCII characters')
+
+        attr = tiledb_array.schema.attr(i)
+
+        if attr.isvar:
+            try:
+                if attr.isnullable:
+                    if(np.issubdtype(attr.dtype, np.unicode_) 
+                        or np.issubdtype(attr.dtype, np.string_) 
+                        or np.issubdtype(attr.dtype, np.bytes_)):
+                        attr_val = np.array(["" if v is None else v for v in values[i]])
+                    else:
+                        attr_val = np.nan_to_num(values[i])
+                else:
+                    attr_val = values[i]
+                buffer, offsets = array_to_buffer(attr_val, True, False)
+            except Exception as exc:
+                raise type(exc)(f"Failed to convert buffer for attribute: '{attr.name}'") from exc
+            buffer_offsets_sizes[i] = offsets.nbytes
+        else:
+            buffer, offsets = values[i], None
+
+        buffer_sizes[i] = buffer.nbytes
+        output_values.append(buffer)
+        output_offsets.append(offsets)
+
+    # Check value layouts
+    if len(values) and nattr > 1:
+        value = output_values[0]
+        isfortran = value.ndim > 1 and value.flags.f_contiguous
+        for value in values:
+            if value.ndim > 1 and value.flags.f_contiguous and not isfortran:
+                raise ValueError("mixed C and Fortran array layouts")
+
+    # Set data and offsets buffers for dimensions (sparse arrays only)
+    ibuffer = nattr
+    if issparse:
+        for dim_idx, coords in enumerate(coordinates):
+            if tiledb_array.schema.domain.dim(dim_idx).isvar:
+                buffer, offsets = array_to_buffer(coords, True, False)
+                buffer_sizes[ibuffer] = buffer.nbytes
+                buffer_offsets_sizes[ibuffer] = offsets.nbytes
+            else:
+                buffer, offsets = coords, None
+                buffer_sizes[ibuffer] = buffer.nbytes
+            output_values.append(buffer)
+            output_offsets.append(offsets)
+
+            name = tiledb_array.schema.domain.dim(dim_idx).name
+            buffer_names.append(name)
+
+            ibuffer = ibuffer + 1
+
+    for label_name, label_values in labels.items():
+        # Append buffer name
+        buffer_names.append(label_name)
+        # Get label data buffer and offsets buffer for the labels
+        dim_label = tiledb_array.schema.dim_label(label_name)
+        if dim_label.isvar:
+            buffer, offsets = array_to_buffer(label_values, True, False)
+            buffer_sizes[ibuffer] = buffer.nbytes
+            buffer_offsets_sizes[ibuffer] = offsets.nbytes
+        else:
+            buffer, offsets = label_values, None
+            buffer_sizes[ibuffer] = buffer.nbytes
+        # Append the buffers
+        output_values.append(buffer)
+        output_offsets.append(offsets)
+
+        ibuffer = ibuffer + 1
+
+
+    # Allocate the query
+    cdef int rc = TILEDB_OK
+    cdef tiledb_query_t* query_ptr = NULL
+    rc = tiledb_query_alloc(ctx_ptr, array_ptr, TILEDB_UPDATE, &query_ptr)
+    if rc != TILEDB_OK:
+        _raise_ctx_err(ctx_ptr, rc)
+
+    # Set layout
+    cdef tiledb_layout_t layout = (
+            TILEDB_UNORDERED
+            if issparse
+            else (TILEDB_COL_MAJOR if isfortran else TILEDB_ROW_MAJOR)
+    )
+    rc = tiledb_query_set_layout(ctx_ptr, query_ptr, layout)
+    if rc != TILEDB_OK:
+        tiledb_query_free(&query_ptr)
+        _raise_ctx_err(ctx_ptr, rc)
+
+    # Create and set the subarray for the query (dense arrays only)
+    cdef np.ndarray s_start
+    cdef np.ndarray s_end
+    cdef np.dtype dim_dtype = None
+    cdef void* s_start_ptr = NULL
+    cdef void* s_end_ptr = NULL
+    cdef tiledb_subarray_t* subarray_ptr = NULL
+    cdef tiledb_query_condition_t* query_condition_ptr = NULL
+    if not issparse:
+        subarray_ptr = <tiledb_subarray_t*>PyCapsule_GetPointer(
+                subarray.__capsule__(), "subarray")
+        # Set the subarray on the query
+        rc = tiledb_query_set_subarray_t(ctx_ptr, query_ptr, subarray_ptr)
+        if rc != TILEDB_OK:
+            tiledb_query_free(&query_ptr)
+            _raise_ctx_err(ctx_ptr, rc)
+    
+    # Check if condition can be set
+    if cond is not None:
+        query_condition_ptr = <tiledb_query_condition_t*>PyCapsule_GetPointer(
+                cond.__capsule__(), "qc")
+        # query_condition_ptr = cond.c_obj.ptr().get();
+        tiledb_query_set_condition(ctx_ptr, query_ptr, query_condition_ptr);
+
+    #         auto pyqc = (cond.attr("c_obj")).cast<PyQueryCondition>();
+    # auto qc = pyqc.ptr().get();
+    # query_->set_condition(*qc);
+    #     tiledb_query_set_condition(
+    #     ctx.ptr().get(), query_.get(), condition.ptr().get())
+
+    # Set buffers on the query
+    cdef bytes bname
+    cdef void* buffer_ptr = NULL
+    cdef uint64_t* offsets_buffer_ptr = NULL
+    cdef uint8_t* nulmap_buffer_ptr = NULL
+    cdef uint64_t* buffer_sizes_ptr = <uint64_t*> np.PyArray_DATA(buffer_sizes)
+    # cdef uint64_t* offsets_buffer_sizes_ptr = <uint64_t*> np.PyArray_DATA(buffer_offsets_sizes)
+    # cdef uint64_t* nullmaps_sizes_ptr = <uint64_t*> np.PyArray_DATA(nullmaps_sizes)
+    try:
+        for i, buffer_name in enumerate(buffer_names):
+            # Get utf-8 version of the name for C-API calls
+            bname = buffer_name.encode('UTF-8')
+
+            # Set data value buffer
+            buffer_ptr = np.PyArray_DATA(output_values[i])
+            rc = tiledb_query_add_update_value(
+                    ctx_ptr, query_ptr, bname, buffer_ptr, buffer_sizes_ptr[i])
+            if rc != TILEDB_OK:
+                _raise_ctx_err(ctx_ptr, rc)
+
+        with nogil:
+            rc = tiledb_query_submit(ctx_ptr, query_ptr)
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
+
+        rc = tiledb_query_finalize(ctx_ptr, query_ptr)
+        if rc != TILEDB_OK:
+            _raise_ctx_err(ctx_ptr, rc)
 
     finally:
         tiledb_query_free(&query_ptr)
@@ -1886,6 +2086,11 @@ cdef class Query(object):
                                 cond=self.cond,
                                 coords=self.coords if self.coords else self.dims,
                                 order=self.order)
+
+    def __setitem__(self, object selection, object val):
+        self.array.update_query(selection,
+                                cond=self.cond,
+                                values=val)
     
     def agg(self, aggs):
         """
@@ -2980,17 +3185,24 @@ def index_domain_coords(dom, idx, check_ndim):
 
     return idx
 
-def _setitem_impl_sparse(self: Array, selection, val, dict nullmaps):
+def _setitem_impl_sparse(self: Array, selection, val, dict nullmaps, object cond):
     cdef tiledb_ctx_t* ctx_ptr = safe_ctx_ptr(self.ctx)
     cdef dict labels = dict()
 
-    if not self.isopen or self.mode != 'w':
+    if not self.isopen or self.mode not in ('w', 'u'):
         raise TileDBError("SparseArray is not opened for writing")
 
     set_dims_only = val is None
     sparse_attributes = list()
     sparse_values = list()
     idx = index_as_tuple(selection)
+
+    # Handle ellipsis in updates for coordinates
+    if self.mode == "u":
+        domain = self.domain
+        idx = replace_ellipsis(domain.ndim, index_as_tuple(selection))
+        idx,_drop = replace_scalars_slice(domain, idx)
+    
     sparse_coords = list(index_domain_coords(self.schema.domain, idx, not set_dims_only))
 
     if set_dims_only:
@@ -3074,16 +3286,34 @@ def _setitem_impl_sparse(self: Array, selection, val, dict nullmaps):
             except Exception as exc:
                 raise TileDBError(f'dtype of attr {attr.name} is "ascii" but attr_val contains invalid ASCII characters')
 
-        ncells = sparse_coords[0].shape[0]
-        if attr_val.size != ncells:
-           raise ValueError("value length ({}) does not match "
-                             "coordinate length ({})".format(attr_val.size, ncells))
+        # If not update check coordinates match values length
+        if self.mode != 'u':
+            ncells = sparse_coords[0].shape[0]
+            if attr_val.size != ncells:
+                raise ValueError("value length ({}) does not match "
+                                "coordinate length ({})".format(attr_val.size, ncells))
         sparse_attributes.append(attr._internal_name)
         sparse_values.append(attr_val)
 
     if (len(sparse_attributes) + len(labels) != len(val.keys())) \
         or (len(sparse_values) + len(labels) != len(val.values())):
         raise TileDBError("Sparse write input data count does not match number of attributes")
+
+    if self.mode == 'u':
+        _update_array(
+            ctx_ptr,
+            self.ptr,
+            self,
+            None,
+            sparse_coords,
+            sparse_attributes,
+            sparse_values,
+            labels,
+            nullmaps,
+            True,
+            cond
+        )
+        return
 
     _write_array(
         ctx_ptr,
@@ -3148,7 +3378,7 @@ cdef class SparseArrayImpl(Array):
         ...                    "a2": np.array([3, 4])}
 
         """
-        _setitem_impl_sparse(self, selection, val, dict())
+        _setitem_impl_sparse(self, selection, val, dict(), None)
 
     def __getitem__(self, object selection):
         """Retrieve nonempty cell data for an item or region of the array
@@ -3371,7 +3601,7 @@ cdef class SparseArrayImpl(Array):
 
         """
         from .subarray import Subarray
-        if not self.isopen or self.mode not in ('r', 'd', 'u'):
+        if not self.isopen or self.mode not in ('r', 'd'):
             raise TileDBError("SparseArray is not opened in read, delete or update mode")
 
         if attr_cond is not None:
@@ -3419,7 +3649,48 @@ cdef class SparseArrayImpl(Array):
         dim_ranges = index_domain_subarray(self, dom, idx)
         subarray = Subarray(self, self.ctx)
         subarray.add_ranges([list([x]) for x in dim_ranges])
+
         return self._read_sparse_subarray(subarray, attr_names, cond, layout)
+
+    def update_query(self, selection, values, cond=None):
+        """
+        Retrieve dimension and data cells for an item or region of the array.
+
+        Optionally subselect over attributes, return sparse result coordinate values,
+        and specify a layout a result layout / cell-order.
+
+        :param selection: tuple of scalar and/or slice objects
+        :param cond: the str expression to filter attributes or dimensions on. The expression must be parsable by tiledb.QueryCondition(). See help(tiledb.QueryCondition) for more details.
+        :param coords: if True, return array of coordinate value (default True).
+        :param values: dictionary of single values to set
+
+        **Example:**
+
+        >>> import tiledb, numpy as np, tempfile
+        >>> # Write to multi-attribute 2D array
+        >>> with tempfile.TemporaryDirectory() as tmp:
+        ...     dom = tiledb.Domain(
+        ...         tiledb.Dim(name="y", domain=(0, 9), tile=2, dtype=np.uint64),
+        ...         tiledb.Dim(name="x", domain=(0, 9), tile=2, dtype=np.uint64))
+        ...     schema = tiledb.ArraySchema(domain=dom, sparse=True,
+        ...         attrs=(tiledb.Attr(name="a1", dtype=np.int64),
+        ...                tiledb.Attr(name="a2", dtype=np.int64)))
+        ...     tiledb.SparseArray.create(tmp + "/array", schema)
+        ...     with tiledb.SparseArray(tmp + "/array", mode='w') as A:
+        ...         # Write in the twp cells (0,0) and (2,3) only.
+        ...         I, J = [0, 2], [0, 3]
+        ...         # Write to each attribute
+        ...         A[I, J] = {"a1": np.array([1, 2]),
+        ...                    "a2": np.array([3, 4])}
+        ...     with tiledb.SparseArray(tmp + "/array", mode='u') as A:
+        ...         # A[:], attribute a1, row-major without coordinates
+        ...         A.query(cond="a1 == 1")[:] = {"a2": 6} # doctest: +ELLIPSIS
+
+        """
+        if not self.isopen or self.mode != 'u':
+            raise TileDBError("SparseArray is not opened in update mode")
+
+        return self._update_sparse_subarray(selection, cond, values)
 
     def __repr__(self):
         if self.isopen:
@@ -3427,6 +3698,15 @@ cdef class SparseArrayImpl(Array):
                 .format(self.uri, self.mode, self.schema.ndim)
         else:
             return "SparseArray(uri={0!r}, mode=closed)".format(self.uri)
+
+    cdef _update_sparse_subarray(self, object selection, object cond, dict values):
+
+        from .query_condition import QueryCondition
+        if isinstance(cond, str):
+            qcond = QueryCondition(cond)
+
+        _setitem_impl_sparse(self, selection, values, dict(), qcond)
+    
 
     cdef _read_sparse_subarray(self, object subarray, list attr_names,
                                object cond, tiledb_layout_t layout):
