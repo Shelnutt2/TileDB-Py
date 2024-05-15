@@ -322,12 +322,8 @@ cdef _update_array(
         tiledb_ctx_t* ctx_ptr,
         tiledb_array_t* array_ptr,
         object tiledb_array,
-        object subarray,
-        list coordinates,
         list buffer_names,
         list values,
-        dict labels,
-        dict nullmaps,
         bint issparse,
         object cond,
     ):
@@ -337,12 +333,9 @@ cdef _update_array(
 
     cdef bint isfortran = False
     cdef Py_ssize_t nattr = len(buffer_names)
-    cdef Py_ssize_t nlabel = len(labels)
 
     # Create arrays to hold buffer sizes
-    cdef Py_ssize_t nbuffer = nattr + nlabel
-    if issparse:
-        nbuffer += tiledb_array.schema.ndim
+    cdef Py_ssize_t nbuffer = nattr
     cdef np.ndarray buffer_sizes = np.zeros((nbuffer,), dtype=np.uint64)
     cdef np.ndarray buffer_offsets_sizes = np.zeros((nbuffer,),  dtype=np.uint64)
     cdef np.ndarray nullmaps_sizes = np.zeros((nbuffer,), dtype=np.uint64)
@@ -3190,12 +3183,8 @@ def _setitem_impl_sparse(self: Array, selection, val, dict nullmaps, object cond
     idx = index_as_tuple(selection)
 
     # Handle ellipsis in updates for coordinates
-    if self.mode == "u":
-        domain = self.domain
-        idx = replace_ellipsis(domain.ndim, index_as_tuple(selection))
-        idx,_drop = replace_scalars_slice(domain, idx)
-    
-    sparse_coords = list(index_domain_coords(self.schema.domain, idx, not set_dims_only))
+    if self.mode != "u":
+        sparse_coords = list(index_domain_coords(self.schema.domain, idx, not set_dims_only))
 
     if set_dims_only:
         _write_array(
@@ -3294,18 +3283,13 @@ def _setitem_impl_sparse(self: Array, selection, val, dict nullmaps, object cond
     if self.mode == 'u':
         from tiledb.main import PyQueryCondition
         cond.init_query_condition(self.uri, sparse_attributes, self.ctx)
-        # pyqcond = ().cast<PyQueryCondition>();
 
         _update_array(
             ctx_ptr,
             self.ptr,
             self,
-            None,
-            sparse_coords,
             sparse_attributes,
             sparse_values,
-            labels,
-            nullmaps,
             True,
             cond.c_obj
         )
