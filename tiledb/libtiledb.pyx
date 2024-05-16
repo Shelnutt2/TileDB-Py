@@ -1797,11 +1797,11 @@ cdef class Array(object):
             _raise_ctx_err(ctx_ptr, rc)
 
         uri_ptr = PyBytes_AS_STRING(uri)
-        rc = tiledb_array_alloc(ctx_ptr, uri_ptr, &array_ptr)
-        if rc != TILEDB_OK:
-            _raise_ctx_err(ctx_ptr, rc)
+        # rc = tiledb_array_alloc(ctx_ptr, uri_ptr, &array_ptr)
+        # if rc != TILEDB_OK:
+            # _raise_ctx_err(ctx_ptr, rc)
 
-        rc = tiledb_deserialize_array(ctx_ptr, buf_ptr, serialization_type_c, client_side, &array_ptr)
+        rc = tiledb_deserialize_array(ctx_ptr, buf_ptr, serialization_type_c, client_side, uri_ptr, &array_ptr)
         if rc != TILEDB_OK:
             _raise_ctx_err(ctx_ptr, rc)
         

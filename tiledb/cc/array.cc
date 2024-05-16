@@ -213,6 +213,7 @@ void init_array(py::module &m) {
           .def_static("deserialize", [](const Context &ctx,
                                   py::buffer buffer,
                                   tiledb_serialization_type_t serialize_type,
+                                  std::string uri,
                                   int32_t client_side) -> Array {
                int rc;
 
@@ -233,7 +234,7 @@ void init_array(py::module &m) {
                if (rc == TILEDB_ERR)
                TPY_ERROR_LOC("Could not set buffer.");
 
-               rc = tiledb_deserialize_array(ctx_c, buf_c, serialize_type, client_side,
+               rc = tiledb_deserialize_array(ctx_c, buf_c, serialize_type, client_side, uri.c_str(),
                                              &arr_c);
                if (rc == TILEDB_ERR)
                TPY_ERROR_LOC("Could not deserialize array.");
